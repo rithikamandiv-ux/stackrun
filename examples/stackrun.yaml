@@ -1,0 +1,10 @@
+# Example stackrun configuration.
+# Try it with: go run ./cmd/stackrun validate -c examples/stackrun.yaml
+services:
+  api:
+    command: echo "api starting"
+    restart: on-failure
+    env:
+      PORT: "4000"
+  web:
+    command: echo "web starting"
