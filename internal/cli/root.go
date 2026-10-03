@@ -23,7 +23,7 @@ merges their logs, restarts them if they crash, and stops them cleanly.`,
 
 	root.PersistentFlags().StringVarP(&opts.configPath, "config", "c", "stackrun.yaml", "path to the config file")
 
-	root.AddCommand(newVersionCmd(), newValidateCmd(opts))
+	root.AddCommand(newVersionCmd(), newValidateCmd(opts), newUpCmd(opts))
 	return root
 }
 
