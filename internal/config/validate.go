@@ -59,6 +59,13 @@ func Validate(cfg *Config) error {
 			add(path+".restart", "must be one of never, on-failure, always (got %q)", svc.Restart)
 		}
 
+		switch {
+		case svc.StopTimeout <= 0:
+			add(path+".stop_timeout", "must be greater than zero (got %s)", svc.StopTimeout)
+		case svc.StopTimeout > MaxStopTimeout:
+			add(path+".stop_timeout", "must be at most %s (got %s)", MaxStopTimeout, svc.StopTimeout)
+		}
+
 		if svc.Dir != "" {
 			info, err := os.Stat(svc.Dir)
 			switch {

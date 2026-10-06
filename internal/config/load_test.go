@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeConfig writes content to stackrun.yaml inside dir and returns its path.
@@ -32,6 +33,7 @@ services:
     env:
       PORT: "4000"
     restart: on-failure
+    stop_timeout: 30s
   worker:
     command: python worker.py
 `)
@@ -54,6 +56,9 @@ services:
 	if backend.Env["PORT"] != "4000" {
 		t.Errorf("Env[PORT] = %q, want %q", backend.Env["PORT"], "4000")
 	}
+	if backend.StopTimeout != 30*time.Second {
+		t.Errorf("StopTimeout = %v, want 30s", backend.StopTimeout)
+	}
 
 	worker := cfg.Services["worker"]
 	if worker.Dir != dir {
@@ -61,6 +66,9 @@ services:
 	}
 	if worker.Restart != RestartNever {
 		t.Errorf("default Restart = %q, want %q", worker.Restart, RestartNever)
+	}
+	if worker.StopTimeout != DefaultStopTimeout {
+		t.Errorf("default StopTimeout = %v, want %v", worker.StopTimeout, DefaultStopTimeout)
 	}
 }
 
@@ -123,6 +131,16 @@ services:
     comand: npm run dev
 `,
 			wantContains: "comand",
+		},
+		{
+			name: "stop_timeout without a unit",
+			content: `
+services:
+  backend:
+    command: npm run dev
+    stop_timeout: 30
+`,
+			wantContains: "parsing",
 		},
 		{
 			name: "validation error",

@@ -65,6 +65,10 @@ func normalise(cfg *Config, baseDir string) {
 			svc.Restart = RestartNever
 		}
 
+		if svc.StopTimeout == 0 {
+			svc.StopTimeout = DefaultStopTimeout
+		}
+
 		switch {
 		case svc.Dir == "":
 			svc.Dir = baseDir

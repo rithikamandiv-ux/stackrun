@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // validConfig returns a config that passes validation.
@@ -15,11 +16,12 @@ func validConfig(t *testing.T) *Config {
 	return &Config{
 		Services: map[string]*Service{
 			"backend": {
-				Name:    "backend",
-				Command: "npm run dev",
-				Dir:     t.TempDir(),
-				Env:     map[string]string{"PORT": "4000"},
-				Restart: RestartNever,
+				Name:        "backend",
+				Command:     "npm run dev",
+				Dir:         t.TempDir(),
+				Env:         map[string]string{"PORT": "4000"},
+				Restart:     RestartNever,
+				StopTimeout: DefaultStopTimeout,
 			},
 		},
 	}
@@ -91,6 +93,23 @@ func TestValidate(t *testing.T) {
 			name:      "env name contains equals",
 			modify:    func(t *testing.T, cfg *Config) { cfg.Services["backend"].Env["A=B"] = "x" },
 			wantPaths: []string{"services.backend.env.A=B"},
+		},
+		{
+			name:      "zero stop timeout",
+			modify:    func(t *testing.T, cfg *Config) { cfg.Services["backend"].StopTimeout = 0 },
+			wantPaths: []string{"services.backend.stop_timeout"},
+		},
+		{
+			name:      "negative stop timeout",
+			modify:    func(t *testing.T, cfg *Config) { cfg.Services["backend"].StopTimeout = -time.Second },
+			wantPaths: []string{"services.backend.stop_timeout"},
+		},
+		{
+			name: "stop timeout too long",
+			modify: func(t *testing.T, cfg *Config) {
+				cfg.Services["backend"].StopTimeout = MaxStopTimeout + time.Second
+			},
+			wantPaths: []string{"services.backend.stop_timeout"},
 		},
 		{
 			name: "multiple errors reported together",

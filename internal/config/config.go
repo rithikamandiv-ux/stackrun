@@ -4,6 +4,17 @@ package config
 import (
 	"maps"
 	"slices"
+	"time"
+)
+
+const (
+	// DefaultStopTimeout is how long a service gets to stop after SIGTERM
+	// before it is killed. Docker Compose uses the same default.
+	DefaultStopTimeout = 10 * time.Second
+
+	// MaxStopTimeout guards against values that would make shutdown hang
+	// for an unreasonable time, such as a mistyped "10h".
+	MaxStopTimeout = 5 * time.Minute
 )
 
 // Config is the top-level structure of a stackrun.yaml file.
@@ -13,11 +24,12 @@ type Config struct {
 
 // Service describes one process that stackrun manages.
 type Service struct {
-	Name    string            `yaml:"-"`
-	Command string            `yaml:"command"`
-	Dir     string            `yaml:"dir"`
-	Env     map[string]string `yaml:"env"`
-	Restart RestartPolicy     `yaml:"restart"`
+	Name        string            `yaml:"-"`
+	Command     string            `yaml:"command"`
+	Dir         string            `yaml:"dir"`
+	Env         map[string]string `yaml:"env"`
+	Restart     RestartPolicy     `yaml:"restart"`
+	StopTimeout time.Duration     `yaml:"stop_timeout"`
 }
 
 // RestartPolicy controls what happens when a service exits.
