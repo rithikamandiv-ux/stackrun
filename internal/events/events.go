@@ -16,11 +16,17 @@ const (
 	Started Kind = iota + 1
 	// Output is one line printed by the service. Stream and Line are set.
 	Output
-	// Exited means the process has ended. ExitCode is set, and Err is set
-	// if the exit status could not be determined.
+	// Exited means the process has ended. ExitCode is set, StopRequested
+	// tells whether stackrun asked it to stop, and Err is set if the exit
+	// status could not be determined.
 	Exited
 	// FailedToStart means the process could not be launched. Err is set.
 	FailedToStart
+	// Stopping means stackrun sent a graceful stop request (SIGTERM).
+	Stopping
+	// Killing means the service did not stop in time, or a forced stop was
+	// requested, so stackrun is killing it (SIGKILL).
+	Killing
 )
 
 func (k Kind) String() string {
@@ -33,6 +39,10 @@ func (k Kind) String() string {
 		return "Exited"
 	case FailedToStart:
 		return "FailedToStart"
+	case Stopping:
+		return "Stopping"
+	case Killing:
+		return "Killing"
 	}
 	return fmt.Sprintf("Kind(%d)", int(k))
 }
@@ -51,12 +61,13 @@ const ExitCodeSignal = -1
 
 // Event describes one thing that happened to one service.
 type Event struct {
-	Time     time.Time
-	Service  string
-	Kind     Kind
-	PID      int
-	Stream   Stream
-	Line     string
-	ExitCode int
-	Err      error
+	Time          time.Time
+	Service       string
+	Kind          Kind
+	PID           int
+	Stream        Stream
+	Line          string
+	ExitCode      int
+	StopRequested bool
+	Err           error
 }
