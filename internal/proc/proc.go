@@ -2,12 +2,16 @@
 package proc
 
 import (
+	"errors"
 	"maps"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
 )
+
+// errNotStarted is returned when signalling a command that never started.
+var errNotStarted = errors.New("process has not been started")
 
 // Spec describes a command to run.
 type Spec struct {

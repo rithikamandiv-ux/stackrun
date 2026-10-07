@@ -2,10 +2,12 @@
 package output
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"sync"
+	"testing"
 
 	"golang.org/x/term"
 
@@ -62,10 +64,16 @@ func (p *Printer) Handle(e events.Event) {
 		p.line(e.Service, e.Line)
 	case events.Started:
 		p.Info(fmt.Sprintf("started %s (pid %d)", e.Service, e.PID))
+	case events.Stopping:
+		p.Info(fmt.Sprintf("stopping %s", e.Service))
+	case events.Killing:
+		p.Info(fmt.Sprintf("killing %s (%s)", e.Service, e.Line))
 	case events.Exited:
 		switch {
 		case e.Err != nil:
 			p.Info(fmt.Sprintf("%s exited: %v", e.Service, e.Err))
+		case e.StopRequested:
+			p.Info(fmt.Sprintf("%s stopped", e.Service))
 		case e.ExitCode == events.ExitCodeSignal:
 			p.Info(fmt.Sprintf("%s was stopped by a signal", e.Service))
 		default:
@@ -113,4 +121,39 @@ func colourAllowedByEnv() bool {
 		return false
 	}
 	return os.Getenv("TERM") != "dumb"
+}
+
+func TestPrinterShutdownMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		event events.Event
+		want  string
+	}{
+		{
+			name:  "stopping",
+			event: events.Event{Service: "api", Kind: events.Stopping},
+			want:  "stackrun | stopping api\n",
+		},
+		{
+			name:  "killing",
+			event: events.Event{Service: "api", Kind: events.Killing, Line: "did not stop within 10s"},
+			want:  "stackrun | killing api (did not stop within 10s)\n",
+		},
+		{
+			name:  "stopped on request",
+			event: events.Event{Service: "api", Kind: events.Exited, ExitCode: events.ExitCodeSignal, StopRequested: true},
+			want:  "stackrun | api stopped\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			NewPrinter(&buf, []string{"api"}, false).Handle(tt.event)
+
+			if got := buf.String(); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
