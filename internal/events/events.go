@@ -25,7 +25,7 @@ const (
 	// Stopping means stackrun sent a graceful stop request (SIGTERM).
 	Stopping
 	// Killing means the service did not stop in time, or a forced stop was
-	// requested, so stackrun is killing it (SIGKILL).
+	// requested, so stackrun is killing it (SIGKILL). Line holds the reason.
 	Killing
 )
 

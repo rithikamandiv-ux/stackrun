@@ -1,10 +1,12 @@
-// Package supervisor starts services and reports what happens to them
-// as events on a channel.
+// Package supervisor starts services, stops them on request, and reports
+// what happens to them as events on a channel.
 package supervisor
 
 import (
 	"bufio"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"sync"
@@ -23,10 +25,17 @@ const eventBufferSize = 256
 // Longer lines are split into chunks of this size.
 const maxLineSize = 1024 * 1024
 
+// pipeCloseGrace is how long to wait for output pipes to close after a
+// service is killed. A process that escaped its group could keep them
+// open forever, so after this grace period stackrun closes them itself.
+const pipeCloseGrace = 2 * time.Second
+
 // Supervisor runs a set of services and reports their lifecycle as events.
 type Supervisor struct {
-	cfg    *config.Config
-	events chan events.Event
+	cfg       *config.Config
+	events    chan events.Event
+	force     chan struct{}
+	forceOnce sync.Once
 }
 
 // New creates a supervisor for every service in cfg.
@@ -34,6 +43,7 @@ func New(cfg *config.Config) *Supervisor {
 	return &Supervisor{
 		cfg:    cfg,
 		events: make(chan events.Event, eventBufferSize),
+		force:  make(chan struct{}),
 	}
 }
 
@@ -44,18 +54,29 @@ func (s *Supervisor) Events() <-chan events.Event {
 }
 
 // Run starts every service and blocks until all of them have exited.
-// It must be called exactly once.
-func (s *Supervisor) Run() {
+// Cancelling ctx stops every service gracefully: SIGTERM first, then
+// SIGKILL after the service's stop timeout. Run must be called once.
+func (s *Supervisor) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, name := range s.cfg.ServiceNames() {
 		svc := s.cfg.Services[name]
-		wg.Go(func() { s.runService(svc) })
+		wg.Go(func() { s.runService(ctx, svc) })
 	}
 	wg.Wait()
 	close(s.events)
 }
 
-func (s *Supervisor) runService(svc *config.Service) {
+// ForceStop kills every running service immediately, without waiting
+// for stop timeouts. It is safe to call more than once, from any goroutine.
+func (s *Supervisor) ForceStop() {
+	s.forceOnce.Do(func() { close(s.force) })
+}
+
+func (s *Supervisor) runService(ctx context.Context, svc *config.Service) {
+	if ctx.Err() != nil {
+		return // shutdown began before this service started
+	}
+
 	failed := func(err error) {
 		s.emit(events.Event{Service: svc.Name, Kind: events.FailedToStart, Err: err})
 	}
@@ -83,15 +104,79 @@ func (s *Supervisor) runService(svc *config.Service) {
 	}
 	s.emit(events.Event{Service: svc.Name, Kind: events.Started, PID: cmd.Process.Pid})
 
-	// Both pipes must be fully read before calling Wait, because Wait
-	// closes them. Calling it too early can lose the final lines.
 	var readers sync.WaitGroup
 	readers.Go(func() { s.forward(svc.Name, events.Stdout, stdout) })
 	readers.Go(func() { s.forward(svc.Name, events.Stderr, stderr) })
-	readers.Wait()
 
-	waitErr := cmd.Wait()
-	s.emit(exitEvent(svc.Name, cmd, waitErr))
+	// Wait for the process in the background. Output must be fully read
+	// before cmd.Wait, because Wait closes the pipes.
+	waitDone := make(chan error, 1)
+	go func() {
+		readers.Wait()
+		waitDone <- cmd.Wait()
+	}()
+
+	stopRequested, waitErr := s.supervise(ctx, svc, cmd, waitDone, stdout, stderr)
+
+	e := exitEvent(svc.Name, cmd, waitErr)
+	e.StopRequested = stopRequested
+	s.emit(e)
+}
+
+// supervise waits for the service to exit, stopping it if shutdown is
+// requested. It reports whether a stop was requested, and the result of
+// cmd.Wait.
+//
+// Signals are only sent before waitDone has delivered a result. There is
+// a tiny window where Wait has reaped the process but its result has not
+// arrived yet; a signal sent then is harmless in practice, because the
+// operating system does not reuse a process ID that quickly.
+func (s *Supervisor) supervise(ctx context.Context, svc *config.Service, cmd *exec.Cmd,
+	waitDone <-chan error, pipes ...io.Closer) (bool, error) {
+
+	forced := false
+	select {
+	case err := <-waitDone:
+		return false, err
+	case <-ctx.Done():
+	case <-s.force:
+		forced = true
+	}
+
+	reason := "forced stop"
+	if !forced {
+		s.emit(events.Event{Service: svc.Name, Kind: events.Stopping})
+
+		if err := proc.Terminate(cmd); err != nil {
+			reason = fmt.Sprintf("graceful stop failed: %v", err)
+		} else {
+			timer := time.NewTimer(svc.StopTimeout)
+			defer timer.Stop()
+
+			select {
+			case err := <-waitDone:
+				return true, err
+			case <-timer.C:
+				reason = fmt.Sprintf("did not stop within %s", svc.StopTimeout)
+			case <-s.force:
+			}
+		}
+	}
+
+	s.emit(events.Event{Service: svc.Name, Kind: events.Killing, Line: reason})
+	_ = proc.Kill(cmd) // only fails if the group is already gone
+
+	select {
+	case err := <-waitDone:
+		return true, err
+	case <-time.After(pipeCloseGrace):
+		// Closing our end of the pipes unblocks the readers, which lets
+		// cmd.Wait run even if an escaped process still holds them open.
+		for _, p := range pipes {
+			_ = p.Close()
+		}
+		return true, <-waitDone
+	}
 }
 
 // forward sends each line read from r as an Output event.

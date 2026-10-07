@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"context"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,24 +18,33 @@ func newConfig(t *testing.T, commands map[string]string) *config.Config {
 	cfg := &config.Config{Services: map[string]*config.Service{}}
 	for name, command := range commands {
 		cfg.Services[name] = &config.Service{
-			Name:    name,
-			Command: command,
-			Dir:     t.TempDir(),
-			Restart: config.RestartNever,
+			Name:        name,
+			Command:     command,
+			Dir:         t.TempDir(),
+			Restart:     config.RestartNever,
+			StopTimeout: config.DefaultStopTimeout,
 		}
 	}
 	return cfg
 }
 
-// runAndCollect runs the supervisor and returns every event it sends.
-// It fails the test if the services do not finish in time.
+// runAndCollect runs the supervisor without ever cancelling it and
+// returns every event it sends.
 func runAndCollect(t *testing.T, cfg *config.Config) []events.Event {
 	t.Helper()
 	sup := New(cfg)
-	go sup.Run()
+	t.Cleanup(sup.ForceStop)
+	go sup.Run(context.Background())
+	return collect(t, sup, nil)
+}
 
+// collect returns every event the supervisor sends, calling hook (if not
+// nil) for each event as it arrives. It fails the test if the event
+// channel is not closed in time.
+func collect(t *testing.T, sup *Supervisor, hook func(events.Event)) []events.Event {
+	t.Helper()
 	var got []events.Event
-	timeout := time.After(10 * time.Second)
+	timeout := time.After(15 * time.Second)
 	for {
 		select {
 		case e, ok := <-sup.Events():
@@ -42,6 +52,9 @@ func runAndCollect(t *testing.T, cfg *config.Config) []events.Event {
 				return got
 			}
 			got = append(got, e)
+			if hook != nil {
+				hook(e)
+			}
 		case <-timeout:
 			t.Fatal("timed out waiting for services to exit")
 		}
@@ -55,6 +68,15 @@ func eventsFor(all []events.Event, service string) []events.Event {
 		if e.Service == service {
 			result = append(result, e)
 		}
+	}
+	return result
+}
+
+// kinds returns the kind of every event, in order.
+func kinds(evs []events.Event) []events.Kind {
+	result := make([]events.Kind, len(evs))
+	for i, e := range evs {
+		result[i] = e.Kind
 	}
 	return result
 }
@@ -79,8 +101,9 @@ func TestRunCapturesOutputAndExitCode(t *testing.T) {
 	if first.Kind != events.Started || first.PID <= 0 {
 		t.Errorf("first event = %v (pid %d), want Started with a PID", first.Kind, first.PID)
 	}
-	if last.Kind != events.Exited || last.ExitCode != 3 {
-		t.Errorf("last event = %v (code %d), want Exited with code 3", last.Kind, last.ExitCode)
+	if last.Kind != events.Exited || last.ExitCode != 3 || last.StopRequested {
+		t.Errorf("last event = %v (code %d, stop requested %v), want Exited with code 3",
+			last.Kind, last.ExitCode, last.StopRequested)
 	}
 	if got := lines(evs, events.Stdout); !slices.Equal(got, []string{"hello"}) {
 		t.Errorf("stdout = %v, want [hello]", got)
@@ -145,5 +168,18 @@ func TestRunSplitsVeryLongLines(t *testing.T) {
 	}
 	if total != length {
 		t.Errorf("received %d bytes in %d chunks, want %d bytes", total, len(got), length)
+	}
+}
+
+func TestRunDoesNotStartServicesAfterCancellation(t *testing.T) {
+	cfg := newConfig(t, map[string]string{"api": "echo should-not-run"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	sup := New(cfg)
+	go sup.Run(ctx)
+
+	if evs := collect(t, sup, nil); len(evs) != 0 {
+		t.Errorf("events = %+v, want none", evs)
 	}
 }
