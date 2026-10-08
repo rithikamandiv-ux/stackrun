@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-09
+
 ### Added
 
 - `stackrun up` starts every service from a `stackrun.yaml` file and streams
@@ -21,3 +23,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   from 1s to 30s, giving up after 5 consecutive restarts.
 - Exit codes following Unix conventions: 130 after Ctrl+C, 1 when a service
   fails.
+
+[Unreleased]: https://github.com/rithikamandiv-ux/stackrun/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rithikamandiv-ux/stackrun/releases/tag/v0.1.0
