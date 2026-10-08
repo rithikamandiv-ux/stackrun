@@ -67,7 +67,7 @@ func Validate(cfg *Config) error {
 		}
 
 		if svc.Dir != "" {
-			info, err := os.Stat(svc.Dir)
+			info, err := os.Stat(svc.Dir) //nolint:gosec // G703: dir comes from the user's own config by design
 			switch {
 			case errors.Is(err, fs.ErrNotExist):
 				add(path+".dir", "directory %q does not exist", svc.Dir)

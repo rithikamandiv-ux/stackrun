@@ -13,7 +13,7 @@ import (
 // The shell starts in a new process group whose ID equals its PID,
 // so the whole process tree can be signalled together.
 func shellCommand(command string) (*exec.Cmd, error) {
-	cmd := exec.Command("/bin/sh", "-c", command)
+	cmd := exec.Command("/bin/sh", "-c", command) //nolint:gosec // G204: running the user's configured command is stackrun's purpose
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd, nil
 }

@@ -13,7 +13,7 @@ import (
 
 // Load reads the config file at path, then parses, normalises and validates it.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: reads the config file the user chose; no trust boundary
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
