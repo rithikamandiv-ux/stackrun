@@ -68,6 +68,11 @@ func (p *Printer) Handle(e events.Event) {
 		p.Info(fmt.Sprintf("stopping %s", e.Service))
 	case events.Killing:
 		p.Info(fmt.Sprintf("killing %s (%s)", e.Service, e.Line))
+	case events.Restarting:
+		p.Info(fmt.Sprintf("restarting %s in %s (attempt %d of %d)",
+			e.Service, e.Delay, e.Attempt, e.MaxAttempts))
+	case events.GaveUp:
+		p.Info(fmt.Sprintf("giving up on %s after %d restarts in a row", e.Service, e.MaxAttempts))
 	case events.Exited:
 		switch {
 		case e.Err != nil:

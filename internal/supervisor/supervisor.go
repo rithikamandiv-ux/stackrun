@@ -1,5 +1,6 @@
-// Package supervisor starts services, stops them on request, and reports
-// what happens to them as events on a channel.
+// Package supervisor starts services, restarts them according to their
+// restart policy, stops them on request, and reports what happens to them
+// as events on a channel.
 package supervisor
 
 import (
@@ -33,6 +34,7 @@ const pipeCloseGrace = 2 * time.Second
 // Supervisor runs a set of services and reports their lifecycle as events.
 type Supervisor struct {
 	cfg       *config.Config
+	limits    restartLimits
 	events    chan events.Event
 	force     chan struct{}
 	forceOnce sync.Once
@@ -42,6 +44,7 @@ type Supervisor struct {
 func New(cfg *config.Config) *Supervisor {
 	return &Supervisor{
 		cfg:    cfg,
+		limits: defaultRestartLimits,
 		events: make(chan events.Event, eventBufferSize),
 		force:  make(chan struct{}),
 	}
@@ -53,8 +56,8 @@ func (s *Supervisor) Events() <-chan events.Event {
 	return s.events
 }
 
-// Run starts every service and blocks until all of them have exited.
-// Cancelling ctx stops every service gracefully: SIGTERM first, then
+// Run starts every service and blocks until all of them have exited for
+// good. Cancelling ctx stops every service gracefully: SIGTERM first, then
 // SIGKILL after the service's stop timeout. Run must be called once.
 func (s *Supervisor) Run(ctx context.Context) {
 	var wg sync.WaitGroup
@@ -72,11 +75,89 @@ func (s *Supervisor) ForceStop() {
 	s.forceOnce.Do(func() { close(s.force) })
 }
 
-func (s *Supervisor) runService(ctx context.Context, svc *config.Service) {
+// shuttingDown reports whether a graceful or forced stop has begun.
+func (s *Supervisor) shuttingDown(ctx context.Context) bool {
 	if ctx.Err() != nil {
-		return // shutdown began before this service started
+		return true
 	}
+	select {
+	case <-s.force:
+		return true
+	default:
+		return false
+	}
+}
 
+// runService runs svc, restarting it according to its restart policy,
+// until it exits for good or shutdown begins.
+func (s *Supervisor) runService(ctx context.Context, svc *config.Service) {
+	attempt := 0
+	for !s.shuttingDown(ctx) {
+		exit, ran, ok := s.runOnce(ctx, svc)
+		if !ok {
+			return // start failures are never retried
+		}
+
+		outcome := runOutcome{
+			exitCode:      exit.ExitCode,
+			err:           exit.Err,
+			stopRequested: exit.StopRequested,
+			duration:      ran,
+		}
+
+		// The shuttingDown check covers a service that crashed on its own
+		// at the same moment shutdown began.
+		restart := shouldRestart(svc.Restart, outcome) && !s.shuttingDown(ctx)
+		if restart {
+			attempt = s.limits.nextAttempt(attempt, outcome.duration)
+		}
+		giveUp := restart && attempt > s.limits.maxRestarts
+
+		exit.WillRestart = restart && !giveUp
+		s.emit(exit)
+
+		switch {
+		case !restart:
+			return
+		case giveUp:
+			s.emit(events.Event{Service: svc.Name, Kind: events.GaveUp, MaxAttempts: s.limits.maxRestarts})
+			return
+		}
+
+		delay := s.limits.backoffDelay(attempt)
+		s.emit(events.Event{
+			Service:     svc.Name,
+			Kind:        events.Restarting,
+			Attempt:     attempt,
+			MaxAttempts: s.limits.maxRestarts,
+			Delay:       delay,
+		})
+		if !s.waitBeforeRestart(ctx, delay) {
+			return
+		}
+	}
+}
+
+// waitBeforeRestart waits for delay. It returns false if shutdown begins
+// first, in which case the service must not be started again.
+func (s *Supervisor) waitBeforeRestart(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-s.force:
+		return false
+	}
+}
+
+// runOnce starts the service, supervises it until it exits, and returns
+// its Exited event (not yet sent) and how long it ran. ok is false if the
+// service failed to start, which has already been reported.
+func (s *Supervisor) runOnce(ctx context.Context, svc *config.Service) (exit events.Event, ran time.Duration, ok bool) {
 	failed := func(err error) {
 		s.emit(events.Event{Service: svc.Name, Kind: events.FailedToStart, Err: err})
 	}
@@ -84,24 +165,25 @@ func (s *Supervisor) runService(ctx context.Context, svc *config.Service) {
 	cmd, err := proc.Command(proc.Spec{Command: svc.Command, Dir: svc.Dir, Env: svc.Env})
 	if err != nil {
 		failed(err)
-		return
+		return events.Event{}, 0, false
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		failed(err)
-		return
+		return events.Event{}, 0, false
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		failed(err)
-		return
+		return events.Event{}, 0, false
 	}
 
 	if err := cmd.Start(); err != nil {
 		failed(err)
-		return
+		return events.Event{}, 0, false
 	}
+	startedAt := time.Now()
 	s.emit(events.Event{Service: svc.Name, Kind: events.Started, PID: cmd.Process.Pid})
 
 	var readers sync.WaitGroup
@@ -118,9 +200,9 @@ func (s *Supervisor) runService(ctx context.Context, svc *config.Service) {
 
 	stopRequested, waitErr := s.supervise(ctx, svc, cmd, waitDone, stdout, stderr)
 
-	e := exitEvent(svc.Name, cmd, waitErr)
-	e.StopRequested = stopRequested
-	s.emit(e)
+	exit = exitEvent(svc.Name, cmd, waitErr)
+	exit.StopRequested = stopRequested
+	return exit, time.Since(startedAt), true
 }
 
 // supervise waits for the service to exit, stopping it if shutdown is

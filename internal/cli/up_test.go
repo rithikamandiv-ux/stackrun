@@ -110,3 +110,32 @@ func TestExitCode(t *testing.T) {
 		})
 	}
 }
+
+func TestUpSucceedsWhenRestartRecovers(t *testing.T) {
+	// The first run creates a marker file and fails; the restart finds the
+	// marker and succeeds, simulating a service that recovers.
+	cfg := &config.Config{Services: map[string]*config.Service{
+		"api": {
+			Name:        "api",
+			Command:     "if [ -f crashed ]; then echo recovered; else touch crashed; exit 1; fi",
+			Dir:         t.TempDir(),
+			Restart:     config.RestartOnFailure,
+			StopTimeout: config.DefaultStopTimeout,
+		},
+	}}
+
+	var out bytes.Buffer
+	err := runUp(context.Background(), cfg, &out, make(chan os.Signal))
+
+	if err != nil {
+		t.Fatalf("unexpected error after a successful restart: %v\noutput:\n%s", err, out.String())
+	}
+	for _, want := range []string{
+		"stackrun | restarting api in 1s (attempt 1 of 5)\n",
+		"api      | recovered\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q\nfull output:\n%s", want, out.String())
+		}
+	}
+}

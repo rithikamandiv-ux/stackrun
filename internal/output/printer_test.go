@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rithikamandiv-ux/stackrun/internal/events"
 )
@@ -143,5 +144,38 @@ func TestShouldUseColourIsFalseForFiles(t *testing.T) {
 
 	if ShouldUseColour(f) {
 		t.Error("colour enabled when writing to a regular file")
+	}
+}
+
+func TestPrinterRestartMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		event events.Event
+		want  string
+	}{
+		{
+			name: "restarting",
+			event: events.Event{
+				Service: "api", Kind: events.Restarting,
+				Delay: 2 * time.Second, Attempt: 2, MaxAttempts: 5,
+			},
+			want: "stackrun | restarting api in 2s (attempt 2 of 5)\n",
+		},
+		{
+			name:  "gave up",
+			event: events.Event{Service: "api", Kind: events.GaveUp, MaxAttempts: 5},
+			want:  "stackrun | giving up on api after 5 restarts in a row\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			NewPrinter(&buf, []string{"api"}, false).Handle(tt.event)
+
+			if got := buf.String(); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

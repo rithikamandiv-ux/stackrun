@@ -3,7 +3,6 @@
 package supervisor
 
 import (
-	"context"
 	"errors"
 	"slices"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rithikamandiv-ux/stackrun/internal/config"
 	"github.com/rithikamandiv-ux/stackrun/internal/events"
 )
 
@@ -34,12 +34,11 @@ func waitUntilGone(t *testing.T, pid int) {
 
 func TestRunStopsServicesWhenContextIsCancelled(t *testing.T) {
 	cfg := newConfig(t, map[string]string{"api": "sleep 30", "web": "sleep 30"})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sup := New(cfg)
-	t.Cleanup(sup.ForceStop)
-	go sup.Run(ctx)
+	for _, svc := range cfg.Services {
+		// "always" proves that a service stackrun stopped is never restarted.
+		svc.Restart = config.RestartAlways
+	}
+	sup, cancel := startSupervisor(t, cfg, testRestartLimits)
 
 	begin := time.Now()
 	started := 0
@@ -63,8 +62,12 @@ func TestRunStopsServicesWhenContextIsCancelled(t *testing.T) {
 		if slices.Contains(kinds(evs), events.Killing) {
 			t.Errorf("%s: was killed, want a graceful stop", name)
 		}
-		if last := evs[len(evs)-1]; last.Kind != events.Exited || !last.StopRequested {
-			t.Errorf("%s: last event = %+v, want Exited with StopRequested", name, last)
+		if got := len(ofKind(evs, events.Started)); got != 1 {
+			t.Errorf("%s: started %d times, want 1 (no restart after stop)", name, got)
+		}
+		last := evs[len(evs)-1]
+		if last.Kind != events.Exited || !last.StopRequested || last.WillRestart {
+			t.Errorf("%s: last event = %+v, want a final Exited with StopRequested", name, last)
 		}
 	}
 }
@@ -72,12 +75,7 @@ func TestRunStopsServicesWhenContextIsCancelled(t *testing.T) {
 func TestRunKillsServiceThatIgnoresTerm(t *testing.T) {
 	cfg := newConfig(t, map[string]string{"api": "trap '' TERM; echo ready; sleep 30"})
 	cfg.Services["api"].StopTimeout = 300 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sup := New(cfg)
-	t.Cleanup(sup.ForceStop)
-	go sup.Run(ctx)
+	sup, cancel := startSupervisor(t, cfg, testRestartLimits)
 
 	// "ready" is printed after the trap is installed, so cancelling only
 	// then guarantees SIGTERM is actually ignored.
@@ -101,12 +99,7 @@ func TestRunKillsServiceThatIgnoresTerm(t *testing.T) {
 
 func TestForceStopSkipsTheStopTimeout(t *testing.T) {
 	cfg := newConfig(t, map[string]string{"api": "trap '' TERM; echo ready; sleep 30"})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sup := New(cfg)
-	t.Cleanup(sup.ForceStop)
-	go sup.Run(ctx)
+	sup, cancel := startSupervisor(t, cfg, testRestartLimits)
 
 	begin := time.Now()
 	all := collect(t, sup, func(e events.Event) {
@@ -129,12 +122,7 @@ func TestForceStopSkipsTheStopTimeout(t *testing.T) {
 
 func TestShutdownLeavesNoOrphans(t *testing.T) {
 	cfg := newConfig(t, map[string]string{"api": "sleep 30 & echo $!; wait"})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sup := New(cfg)
-	t.Cleanup(sup.ForceStop)
-	go sup.Run(ctx)
+	sup, cancel := startSupervisor(t, cfg, testRestartLimits)
 
 	child := 0
 	collect(t, sup, func(e events.Event) {

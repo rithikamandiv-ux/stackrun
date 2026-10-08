@@ -93,13 +93,14 @@ func runUp(ctx context.Context, cfg *config.Config, out io.Writer, signals <-cha
 }
 
 // isFailure reports whether an event means a service did not succeed.
-// A service that exits because stackrun stopped it is not a failure.
+// A service that exits because stackrun stopped it, or that is about to
+// be restarted, is not a final failure.
 func isFailure(e events.Event) bool {
 	switch e.Kind {
 	case events.FailedToStart:
 		return true
 	case events.Exited:
-		return !e.StopRequested && (e.ExitCode != 0 || e.Err != nil)
+		return !e.StopRequested && !e.WillRestart && (e.ExitCode != 0 || e.Err != nil)
 	}
 	return false
 }
