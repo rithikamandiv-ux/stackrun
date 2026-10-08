@@ -1,0 +1,10 @@
+# Demo configuration used to record docs/demo.gif.
+# Run it yourself with: stackrun up -c examples/demo.yaml
+services:
+  api:
+    command: 'echo "listening on :4000"; while true; do sleep 2; echo "GET /health 200"; done'
+  web:
+    command: 'echo "ready in 312 ms"; while true; do sleep 3; echo "page reloaded"; done'
+  worker:
+    command: 'echo "connecting to queue..."; sleep 1; echo "connection refused" >&2; exit 1'
+    restart: on-failure
