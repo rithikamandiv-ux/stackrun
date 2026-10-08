@@ -1,0 +1,38 @@
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - errorlint # error comparisons that break with wrapped errors
+    - gocritic # bugs, performance issues and style problems
+    - gosec # security problems
+    - misspell # commonly misspelled English words
+    - unconvert # unnecessary type conversions
+    - nolintlint
+
+  exclusions:
+    presets:
+      # Ignores well-known cases where checking an error adds no value,
+      # such as errors from Close in deferred calls.
+      - std-error-handling
+    rules:
+      # Tests deliberately create files, run shell commands and use
+      # fixed paths, which gosec would otherwise report.
+      - path: _test\.go
+        linters:
+          - gosec
+  settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      # Keep this project's own imports in a separate group.
+      local-prefixes:
+        - github.com/rithikamandiv-ux/stackrun
