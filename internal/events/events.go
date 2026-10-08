@@ -17,8 +17,8 @@ const (
 	// Output is one line printed by the service. Stream and Line are set.
 	Output
 	// Exited means the process has ended. ExitCode is set, StopRequested
-	// tells whether stackrun asked it to stop, and Err is set if the exit
-	// status could not be determined.
+	// tells whether stackrun asked it to stop, WillRestart tells whether a
+	// restart follows, and Err is set if the exit status is unknown.
 	Exited
 	// FailedToStart means the process could not be launched. Err is set.
 	FailedToStart
@@ -27,6 +27,12 @@ const (
 	// Killing means the service did not stop in time, or a forced stop was
 	// requested, so stackrun is killing it (SIGKILL). Line holds the reason.
 	Killing
+	// Restarting means the service will start again after Delay.
+	// Attempt and MaxAttempts are set.
+	Restarting
+	// GaveUp means the service exited too many times in a row and will
+	// not be restarted again. MaxAttempts is set.
+	GaveUp
 )
 
 func (k Kind) String() string {
@@ -43,6 +49,10 @@ func (k Kind) String() string {
 		return "Stopping"
 	case Killing:
 		return "Killing"
+	case Restarting:
+		return "Restarting"
+	case GaveUp:
+		return "GaveUp"
 	}
 	return fmt.Sprintf("Kind(%d)", int(k))
 }
@@ -69,5 +79,9 @@ type Event struct {
 	Line          string
 	ExitCode      int
 	StopRequested bool
+	WillRestart   bool
+	Attempt       int
+	MaxAttempts   int
+	Delay         time.Duration
 	Err           error
 }
